@@ -39,7 +39,7 @@ func (p *WebRTCPeer) AnswerSender(offer webrtc.SessionDescription) (answer webrt
 	return webrtcEngine.CreateReceiver(offer, &p.PC, &p.Track, p.stopChan, p.pliChan)
 }
 
-func (p *WebRTCPeer) AnswerReceiver(offer webrtc.SessionDescription, addTrack *webrtc.TrackLocalStaticRTP) (answer webrtc.SessionDescription, err error) {
+func (p *WebRTCPeer) AnswerReceiver(offer webrtc.SessionDescription, addTrack **webrtc.TrackLocalStaticRTP) (answer webrtc.SessionDescription, err error) {
 	logrus.Infof("WebRTCPeer AnswerReceiver")
 	return webrtcEngine.CreateSender(offer, &p.PC, addTrack)
 }

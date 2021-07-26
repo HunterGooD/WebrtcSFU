@@ -2,6 +2,7 @@ package media
 
 import (
 	"log"
+	"time"
 
 	"github.com/pion/rtcp"
 	"github.com/pion/webrtc/v3"
@@ -52,19 +53,22 @@ func NewWebRTCEngine() *WebRTCEngine {
 	return w
 }
 
-func (e WebRTCEngine) CreateSender(offer webrtc.SessionDescription, pc **webrtc.PeerConnection, track *webrtc.TrackLocalStaticRTP) (webrtc.SessionDescription, error) {
+func (e WebRTCEngine) CreateSender(offer webrtc.SessionDescription, pc **webrtc.PeerConnection, track **webrtc.TrackLocalStaticRTP) (webrtc.SessionDescription, error) {
 	var err error
 	*pc, err = e.api.NewPeerConnection(e.conf)
 	if err != nil {
 		return webrtc.SessionDescription{}, err
 	}
-	logrus.Infof("Set track on peer connection %v", track)
-	if track != nil {
-		(*pc).AddTrack(track)
-		err := (*pc).SetRemoteDescription(offer)
-		if err != nil {
-			return webrtc.SessionDescription{}, err
-		}
+
+	for *track == nil {
+		time.Sleep(time.Millisecond * 100)
+	}
+	logrus.Infof("[TRACK] %p, %#v", *track, **track)
+	logrus.Infof("Set track on peer connection ")
+	(*pc).AddTrack(*track)
+	err = (*pc).SetRemoteDescription(offer)
+	if err != nil {
+		return webrtc.SessionDescription{}, err
 	}
 
 	answer, err := (*pc).CreateAnswer(nil)
@@ -72,7 +76,6 @@ func (e WebRTCEngine) CreateSender(offer webrtc.SessionDescription, pc **webrtc.
 	if err != nil {
 		return webrtc.SessionDescription{}, err
 	}
-
 	return answer, nil
 }
 

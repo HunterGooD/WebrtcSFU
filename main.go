@@ -66,9 +66,13 @@ func main() {
 }
 
 type User struct {
-	*websocket.Conn
-	UID string
+	Conn *websocket.Conn
+	UID  string
 	sync.Mutex
+}
+
+func (u *User) Close() {
+	processLeave(u.UID)
 }
 
 func (t *User) WriteJSON(v interface{}) error {
@@ -113,7 +117,7 @@ func handleWS(c *gin.Context) {
 	user := User{Conn: socket, UID: uid}
 	go func() {
 		for {
-			_, message, err := user.ReadMessage()
+			_, message, err := user.Conn.ReadMessage()
 			if err != nil {
 				log.Errorf("Read socket Error %w", err)
 				user.Close()
@@ -192,6 +196,20 @@ func handleWS(c *gin.Context) {
 			return
 		}
 	}
+}
+
+func processLeave(userId string) {
+	mess := make(map[string]interface{})
+	mess["pubID"] = userId
+
+	for id, user := range users {
+		if id != userId {
+			user.sendMessage(MethodOnUnpublish, mess)
+		}
+	}
+	deletePeer(userId, true)
+	deletePeer(userId, false)
+	delUser(userId)
 }
 
 func processSubscribe(u *User, sdp webrtc.SessionDescription, pubID string) {
@@ -280,13 +298,13 @@ func answer(uid, peerID string, sdp webrtc.SessionDescription, sender bool) (web
 		for {
 			select {
 			case <-ticker.C:
-				answer, err = p.AnswerReceiver(sdp, pub.Track)
+				answer, err = p.AnswerReceiver(sdp, &pub.Track)
 				return answer, err
 			default:
 				if pub.Track == nil {
 					time.Sleep(time.Millisecond * 200)
 				} else {
-					answer, err = p.AnswerReceiver(sdp, pub.Track)
+					answer, err = p.AnswerReceiver(sdp, &pub.Track)
 					return answer, err
 				}
 			}
