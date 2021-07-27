@@ -52,17 +52,20 @@ func (p *WebRTCPeer) SendPLI() {
 				return
 			}
 		}()
-		ticker := time.NewTicker(time.Second)
-		i := 0
+		ticker := time.NewTicker(time.Second * 3)
+		// i := 0
 		for {
 			select {
 			case <-ticker.C:
 				p.pliChan <- 1
-				if i > 3 {
-					return
-				}
-				i++
+				logrus.Infof("PLI request")
+				// if i > 3 {
+				// 	logrus.Infof("return pli")
+				// 	return
+				// }
+				// i++
 			case <-p.stopChan:
+				logrus.Infof("STOP return pli")
 				return
 			}
 		}

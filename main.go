@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 	"webrtcGudov/internal/media"
+	"webrtcGudov/internal/model"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -82,16 +83,8 @@ func (t *User) WriteJSON(v interface{}) error {
 	return t.Conn.WriteJSON(v)
 }
 
-func (u *User) sendMessage(msgType string, data map[string]interface{}) {
-
-	var message map[string]interface{} = nil
-
-	message = map[string]interface{}{
-		"type": msgType,
-		"data": data,
-	}
-
-	u.WriteJSON(message)
+func (u *User) sendMessage(data model.Package) {
+	u.WriteJSON(data)
 }
 
 func handleWS(c *gin.Context) {
@@ -129,22 +122,15 @@ func handleWS(c *gin.Context) {
 	}()
 
 	// var pck *model.Package
-	var pck map[string]interface{}
+	var pck model.Package
 	for {
 		select {
 		case _ = <-pingTicker.C:
 			if err := user.WriteJSON(
-				// &model.Package{
-				// 	Head: model.Head{
-				// 		Event: "heartPackage",
-				// 	},
-				// 	Body: model.Body{
-				// 		Data: "",
-				// 	},},
-				map[string]interface{}{
-					"type": "heartPackage",
-					"data": "",
-				},
+				&model.Package{
+					Head: model.Head{
+						Event: "heartPackage",
+					}},
 			); err != nil {
 				pingTicker.Stop()
 				return
@@ -158,21 +144,11 @@ func handleWS(c *gin.Context) {
 					return
 				}
 				var sdp webrtc.SessionDescription
-				d := pck["data"].(map[string]interface{})
-
-				if _, ok := d["jsep"]; ok {
-					// if err := json.Unmarshal([]byte(d["jsep"].(string)), &sdp); err != nil {
-					// 	log.Warnf("Error parse sdp %s", message)
-					// }
-					jsep := d["jsep"].(map[string]interface{})
-					sdp = webrtc.SessionDescription{
-						Type: webrtc.NewSDPType(jsep["type"].(string)),
-						SDP:  jsep["sdp"].(string),
-					}
-
+				if err := json.Unmarshal([]byte(pck.Body.SDP), &sdp); err != nil {
+					log.Warnf("Error parse sdp %s", message)
 				}
 
-				switch pck["type"] {
+				switch pck.Head.Event {
 				case MethodJoin:
 					processJoin(&user)
 					break
@@ -180,7 +156,7 @@ func handleWS(c *gin.Context) {
 					processPublish(&user, sdp)
 					break
 				case MethodSubscribe:
-					processSubscribe(&user, sdp, pck["data"].(map[string]interface{})["pubID"].(string))
+					processSubscribe(&user, sdp, pck.Head.PubID)
 					break
 				case MethodLeave:
 					processJoin(&user)
@@ -199,12 +175,16 @@ func handleWS(c *gin.Context) {
 }
 
 func processLeave(userId string) {
-	mess := make(map[string]interface{})
-	mess["pubID"] = userId
+	mess := model.Package{
+		Head: model.Head{
+			Event: MethodOnUnpublish,
+			PubID: userId,
+		},
+	}
 
 	for id, user := range users {
 		if id != userId {
-			user.sendMessage(MethodOnUnpublish, mess)
+			user.sendMessage(mess)
 		}
 	}
 	deletePeer(userId, true)
@@ -221,29 +201,30 @@ func processSubscribe(u *User, sdp webrtc.SessionDescription, pubID string) {
 		log.Errorf("Error create answer %v", err)
 		return
 	}
-
-	resp := make(map[string]interface{})
-	resp["jsep"] = answer
-	resp["userID"] = u.UID
-	resp["pubID"] = pubID
-
-	respByte, err := json.Marshal(resp)
+	sdpByte, err := json.Marshal(&answer)
 	if err != nil {
-		log.Errorf("Error json marshal %v", err)
 		return
 	}
-	sendPLI(u.UID)
-	respStr := string(respByte)
 
-	if respStr != "" {
-		u.sendMessage(MethodOnSubscribe, resp)
-		log.Infof("subscriver id:%s", u.UID)
-		return
+	resp := model.Package{
+		Head: model.Head{
+			Event:  MethodOnSubscribe,
+			UserID: u.UID,
+			PubID:  pubID,
+		},
+		Body: model.Body{
+			SDP: string(sdpByte),
+		},
 	}
+
+	sendPLI(u.UID)
+
+	u.sendMessage(resp)
+	log.Infof("subs reciver id:%s", u.UID)
+	return
 }
 
 func processPublish(u *User, sdp webrtc.SessionDescription) {
-	var data []byte
 
 	addPeer(u.UID, true)
 
@@ -252,27 +233,32 @@ func processPublish(u *User, sdp webrtc.SessionDescription) {
 		log.Errorf("Error create answer %v", err)
 		return
 	}
+	sdpByte, err := json.Marshal(&answer)
+	if err != nil {
+		return
+	}
 
-	resp := make(map[string]interface{})
-	resp["jsep"] = answer
-	resp["userID"] = u.UID
-	respByte, err := json.Marshal(resp)
+	// resp := make(map[string]interface{})
+	// resp["jsep"] = answer
+	// resp["userID"] = u.UID
+	resp := model.Package{
+		Head: model.Head{
+			Event:  MethodOnPublish,
+			UserID: u.UID,
+		},
+		Body: model.Body{
+			SDP: string(sdpByte),
+		},
+	}
+	respByte, err := json.Marshal(&resp)
 	if err != nil {
 		return
 	}
 	respStr := string(respByte)
 	if respStr != "" {
-		//
-		u.sendMessage(MethodOnPublish, resp)
 
-		onPublish := make(map[string]interface{})
-		onPublish["pubID"] = u.UID
-
-		if data, err = json.Marshal(resp); err != nil {
-			log.Errorf("Error on marshal %v", resp)
-		}
-		log.Infof("Send on puplish %s", data)
-		sendMessage(u, MethodOnPublish, string(data))
+		u.sendMessage(resp)
+		sendMessage(u, resp)
 		return
 	}
 }
@@ -298,14 +284,12 @@ func answer(uid, peerID string, sdp webrtc.SessionDescription, sender bool) (web
 		for {
 			select {
 			case <-ticker.C:
-				answer, err = p.AnswerReceiver(sdp, &pub.Track)
-				return answer, err
+				return p.AnswerReceiver(sdp, &pub.Track)
 			default:
 				if pub.Track == nil {
 					time.Sleep(time.Millisecond * 200)
 				} else {
-					answer, err = p.AnswerReceiver(sdp, &pub.Track)
-					return answer, err
+					return p.AnswerReceiver(sdp, &pub.Track)
 				}
 			}
 		}
@@ -318,21 +302,29 @@ func processJoin(u *User) {
 
 	users[u.UID] = u
 
-	mess := make(map[string]interface{})
+	mess := model.Package{
+		Head: model.Head{
+			Event: MethodOnPublish,
+		},
+	}
 
 	pubLock.RLock()
 	defer pubLock.RUnlock()
 	for pubID := range pubPeers {
 		if pubID != u.UID {
-			mess["pubID"] = pubID
-			mess["userID"] = pubID
-			u.sendMessage(MethodOnPublish, mess)
+			mess.Head.PubID = pubID
+			mess.Head.UserID = pubID
+			u.sendMessage(mess)
 		}
 	}
 
-	mess = map[string]interface{}{}
-	mess["status"] = "success"
-	u.sendMessage(MethodOnJoin, mess)
+	mess = model.Package{
+		Head: model.Head{
+			Event: MethodOnJoin,
+		},
+	}
+	mess.Body.Data = "success"
+	u.sendMessage(mess)
 
 	log.Infof("%s user %s data %v", u.UID, MethodOnJoin, mess)
 }
@@ -398,6 +390,7 @@ func addPeer(id string, sender bool) {
 }
 
 func sendPLI(skipID string) {
+	log.Infof("Send PLI")
 	pubLock.RLock()
 	defer pubLock.RUnlock()
 	for k, v := range pubPeers {
@@ -407,7 +400,7 @@ func sendPLI(skipID string) {
 	}
 }
 
-func sendMessage(from *User, msgType string, data string) {
+func sendMessage(from *User, message model.Package) {
 	// var message = model.Package{
 	// 	Head: model.Head{
 	// 		Event:  msgType,
@@ -417,13 +410,6 @@ func sendMessage(from *User, msgType string, data string) {
 	// 		Data: data,
 	// 	},
 	// }
-
-	var message map[string]interface{} = nil
-
-	message = map[string]interface{}{
-		"type": msgType,
-		"data": data,
-	}
 
 	for id, user := range users {
 		if id != from.UID {
